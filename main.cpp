@@ -53,7 +53,7 @@ public:
     std::cout << "ModelRun constructor ends\n";
   }
 
-  virtual std::vector<int> GetMultiplicity() const {
+  virtual std::vector<int> GetRecoMultiplicity() const {
     std::vector<int> result;
     for (const auto& event : vec_of_events){result.push_back(event.vec_of_capt_cand.size());}
     return result;
@@ -164,6 +164,7 @@ public:
       vec_of_events.push_back(event);
     }
     data_file->Close();
+    delete data_file;
     std::cout << "NTag_ModelRun constructor ends\n";
   }
 };
@@ -171,17 +172,19 @@ public:
 class ModelComparer {
 private:
   std::vector<ModelRun*> models;
-  std::string output_fname;
 public:
   ModelComparer(const std::vector<ModelRun*>& m) : models{m} {}
-  void Compare() const {
+  void CompareAndSaveToFile(const std::string& out_fname) const {
 
-    THStack reco_mult_stack = CompareBetweenModels([](const ModelRun* m){return m->GetMultiplicity();},
+    TFile* fout = new TFile(out_fname.c_str(), "recreate");
+
+
+    THStack reco_mult_stack = CompareBetweenModels([](const ModelRun* m){return m->GetRecoMultiplicity();},
 						  "reco_mult_stack",
 						  "Comparison Of Neutron Tagging Models - Reconstructed Multiplicity;Multiplicity;",
 						  {11,0,10});
-    reco_mult_stack.SaveAs("test_lambda.root");
-						  
+    reco_mult_stack.Write();
+    fout->Close(); 
 
   }  
 
@@ -206,19 +209,20 @@ public:
 
 int main(){
 
-  const std::string ntag_file{"/raid6/marcus/ntag_cnn_skg4_ibd.root"};
-  const std::string bdt_file{"/raid6/marcus/skg4ibd_bdtOut.root"};
+  const std::string ntag_file_str{"./input_files/ntag_cnn_skg4_ibd.root"};
+  const std::string bdt_file_str{"/input_files/skg4ibd_bdtOut.root"};
+  const std::string out_file_str{"./neutron_tagging_comparison_output.root"};
 
   std::vector<ModelRun*> vec_of_models;
 
-  NTag_ModelRun ntag_modelrun(ntag_file);
+  NTag_ModelRun ntag_modelrun(ntag_file_str);
   vec_of_models.push_back(&ntag_modelrun);
 
-  BDT_ModelRun bdt_modelrun(bdt_file);  
+  BDT_ModelRun bdt_modelrun(bdt_file_str);  
   vec_of_models.push_back(&bdt_modelrun);
  
   ModelComparer comparer(vec_of_models);
-  comparer.Compare();
+  comparer.CompareAndSaveToFile(out_file_str);
  
   return 0;
 }
