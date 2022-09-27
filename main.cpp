@@ -229,7 +229,7 @@ private:
 			   bins.at(0), bins.at(1), bins.at(2));
     
     hist1->SetFillColor(colour+=2);
-    hist1->SetLineWidth(5);
+    hist1->SetLineWidth(4);
     for (auto&& elem : prop1_of(model_run)){
       hist1->Fill(elem);
     }
@@ -240,7 +240,7 @@ private:
 			   bins.at(0), bins.at(1), bins.at(2));
     
     hist2->SetFillColor(colour+=2);
-    hist2->SetLineWidth(5);
+    hist2->SetLineWidth(4);
     for (auto&& elem : prop2_of(model_run)){
       hist2->Fill(elem);
     }
