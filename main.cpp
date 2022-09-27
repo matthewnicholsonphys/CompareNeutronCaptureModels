@@ -8,6 +8,8 @@
 #include "THStack.h"
 #include "TH1D.h"
 
+#include "EventTrueCaptures.h"
+
 struct CaptureCandidate {
   double likelihood_metric{0};
   int matched{0};  // 0=mistag, 1=H, 2=Gd, 3=decay e                            
@@ -25,6 +27,7 @@ struct CaptureCandidate {
 struct Event {
   int event_number;
   std::vector<CaptureCandidate> vec_of_capt_cand;
+  
 };
 
 class ModelRun {
@@ -53,11 +56,23 @@ public:
     std::cout << "ModelRun constructor ends\n";
   }
 
-  virtual std::vector<int> GetRecoMultiplicity() const {
+  virtual std::vector<int> GetNumbOfCandidates() const {
     std::vector<int> result;
     for (const auto& event : vec_of_events){result.push_back(event.vec_of_capt_cand.size());}
     return result;
   }
+
+  virtual std::vector<double> GetLikelihoodMetrics() const {
+    std::vector<double> result;
+    for (auto&& event : vec_of_events){
+      for (auto&& cap_cand : event.vec_of_capt_cand){
+	result.push_back(cap_cand.likelihood_metric);
+      }
+    }
+    return result;
+  }
+
+  virtual std::vector<int> GetReconstructedMultiplicity() const = 0;
 
   const std::string& GetModelName() const {return model_name;}
 };
@@ -86,7 +101,7 @@ public:
     sk2p2_tree->SetBranchAddress("dt",&candidate_ts);  // dt positron->neutron                                                          
     // these are offset of 20E3 and need scaling by /1E3? positron time should be 0 for neutron gun...
     
-    const auto numb_of_events = sk2p2_tree->GetEntries();
+    const auto numb_of_events = 48667; //sk2p2_tree->GetEntries();
     for (auto event_idx = 0; event_idx < numb_of_events; ++event_idx){
       sk2p2_tree->GetEntry(event_idx);
       Event event;
@@ -107,6 +122,19 @@ public:
     data_file->Close();
     std::cout << "BDT_ModelRun constructor ends\n";
   }
+
+  std::vector<int> GetReconstructedMultiplicity() const override {
+    std::vector<int> result;
+    for (auto&& event : vec_of_events){
+      int numb_of_neutrons{0};
+      for(auto&& cap_cand : event.vec_of_capt_cand){
+	if (cap_cand.likelihood_metric == 1){++numb_of_neutrons;}
+      }
+      result.push_back(numb_of_neutrons);
+    }
+    return result;
+  } 
+
 };
 
 class NTag_ModelRun : public ModelRun {
@@ -143,7 +171,7 @@ public:
     candidate_tree->SetBranchAddress("TrmsFitVertex_Y",&candidate_ys_ptr);
     candidate_tree->SetBranchAddress("TrmsFitVertex_Z",&candidate_zs_ptr);
 
-    const auto numb_of_events = candidate_tree->GetEntries();
+    const auto numb_of_events = 48667; //candidate_tree->GetEntries();
     for (auto event_idx = 0; event_idx < numb_of_events; ++event_idx){
       candidate_tree->GetEntry(event_idx);
       Event event;
@@ -164,65 +192,137 @@ public:
       vec_of_events.push_back(event);
     }
     data_file->Close();
-    delete data_file;
     std::cout << "NTag_ModelRun constructor ends\n";
   }
+
+  std::vector<int> GetReconstructedMultiplicity() const override {
+    std::vector<int> result;
+    for (auto&& event : vec_of_events){
+      int numb_of_neutrons{0};
+      for(auto&& cap_cand : event.vec_of_capt_cand){
+	if (cap_cand.likelihood_metric != 0){++numb_of_neutrons;}
+      }
+      result.push_back(numb_of_neutrons);
+    }
+    return result;
+  } 
+  
 };
 
 class ModelComparer {
 private:
   std::vector<ModelRun*> models;
-public:
-  ModelComparer(const std::vector<ModelRun*>& m) : models{m} {}
-  void CompareAndSaveToFile(const std::string& out_fname) const {
 
-    TFile* fout = new TFile(out_fname.c_str(), "recreate");
+  template <typename ModelPropLmbda1, typename ModelPropLmbda2>
+  THStack CompareProperties(const ModelRun* model_run,
+			    const ModelPropLmbda1 prop1_of, std::string&& prop1_name,
+			    const ModelPropLmbda2 prop2_of, std::string&& prop2_name,
+			    std::string&& stack_name,
+			    std::string&& stack_title,
+			    std::array<int, 3>&& bins){
+    int colour{0};
 
-
-    THStack reco_mult_stack = CompareBetweenModels([](const ModelRun* m){return m->GetRecoMultiplicity();},
-						  "reco_mult_stack",
-						  "Comparison Of Neutron Tagging Models - Reconstructed Multiplicity;Multiplicity;",
-						  {11,0,10});
-    reco_mult_stack.Write();
-    fout->Close(); 
-
-  }  
-
-  template <typename ModelProperty>
-  THStack CompareBetweenModels(const ModelProperty& thing_to_compare_of, const std::string&& stack_name, const std::string&& stack_title, const std::vector<double>&& bins) const {
-    int colour_numb{0};
     THStack the_stack(stack_name.c_str(), stack_title.c_str());
     
-    for (const auto& model : models){
-      TH1D* h = new TH1D(model->GetModelName().c_str(), model->GetModelName().c_str(), bins.at(0), bins.at(1), bins.at(2));
-      // root memory management sucks - THStack handles the deletion of this.
-      h->SetFillColor(colour_numb+=2);
-      h->SetLineWidth(5);
-      for (const auto& c : thing_to_compare_of(model)){
-	h->Fill(c);
-      }
-      the_stack.Add(h);
+    TH1D* hist1 = new TH1D((prop1_name + "_" + model_run->GetModelName()).c_str(),
+			   prop1_name.c_str(),
+			   bins.at(0), bins.at(1), bins.at(2));
+    
+    hist1->SetFillColor(colour+=2);
+    hist1->SetLineWidth(5);
+    for (auto&& elem : prop1_of(model_run)){
+      hist1->Fill(elem);
     }
+    the_stack.Add(hist1);
+
+    TH1D* hist2 = new TH1D((prop2_name + "_" + model_run->GetModelName()).c_str(),
+			   prop2_name.c_str(),
+			   bins.at(0), bins.at(1), bins.at(2));
+    
+    hist2->SetFillColor(colour+=2);
+    hist2->SetLineWidth(5);
+    for (auto&& elem : prop2_of(model_run)){
+      hist2->Fill(elem);
+    }
+    the_stack.Add(hist2);
+
     return the_stack;
-  } 
+  }
+
+  template <typename ModelPropertyLmbda>
+  THStack CompareBetweenModels(const ModelPropertyLmbda& return_property_of,
+			       std::string&& stack_name,
+			       std::string&& stack_title,
+			       std::array<int, 3>&& bins){
+  int colour{0};
+
+  THStack the_stack(stack_name.c_str(), stack_title.c_str());
+  for (const auto& model : models){
+    //root memory managment sucks - THStack handles deletion.
+    TH1D* hist = new TH1D((stack_name + "_" + model->GetModelName()).c_str(), 
+			  model->GetModelName().c_str(), 
+			  bins.at(0), bins.at(1), bins.at(2));
+    hist->SetFillColor(colour+=2);
+    hist->SetLineWidth(5);
+    for (auto&& elem : return_property_of(model)){
+      hist->Fill(elem);
+    }
+    the_stack.Add(hist);
+  }
+  return the_stack;
+}
+
+public:
+  ModelComparer(std::vector<ModelRun*> m) : models{m} {}
+
+  void CompareAndSaveToFile(std::string&& out_fname){
+    TFile* fout = new TFile(out_fname.c_str(), "recreate");
+
+    THStack numb_of_cand_stack = CompareBetweenModels([](const ModelRun* m){return m->GetNumbOfCandidates();},
+						       "numb_of_cand_stack",
+						       "Comparison Of Neutron Models - Number Of Candidates; numb of candidates",
+						       {11, 0, 10});
+    numb_of_cand_stack.Write();
+
+    THStack likelihood_metrics_stack = CompareBetweenModels([](const ModelRun* m){return m->GetLikelihoodMetrics();},
+						      "likelihood_metrics_stack",
+						      "Comparison Of Neutron Models - Likelihood Metrics; metric",
+						      {11, 0, 10});
+    likelihood_metrics_stack.Write();
+
+
+    THStack reco_mult_stack = CompareBetweenModels([](const ModelRun* m){return m->GetReconstructedMultiplicity();},
+						   "reco_mult_stack",
+						   "Comparison Of Neutron Models - Reconstructed Multiplicity; multiplicity",
+						   {11, 0, 10});
+    reco_mult_stack.Write();
+						   
+
+
+
+    fout->Close();
+    delete fout;
+
+  }
 };
 
 int main(){
 
-  const std::string ntag_file_str{"./input_files/ntag_cnn_skg4_ibd.root"};
-  const std::string bdt_file_str{"/input_files/skg4ibd_bdtOut.root"};
-  const std::string out_file_str{"./neutron_tagging_comparison_output.root"};
+  TClass::GetClass("TVector3")->IgnoreTObjectStreamer();
+
+  const std::string ntag_file{"/raid6/marcus/ntag_cnn_skg4_ibd.root"};
+  const std::string bdt_file{"/raid6/marcus/skg4ibd_bdtOut.root"};
 
   std::vector<ModelRun*> vec_of_models;
 
-  NTag_ModelRun ntag_modelrun(ntag_file_str);
+  NTag_ModelRun ntag_modelrun(ntag_file);
   vec_of_models.push_back(&ntag_modelrun);
 
-  BDT_ModelRun bdt_modelrun(bdt_file_str);  
+  BDT_ModelRun bdt_modelrun(bdt_file);  
   vec_of_models.push_back(&bdt_modelrun);
  
   ModelComparer comparer(vec_of_models);
-  comparer.CompareAndSaveToFile(out_file_str);
+  comparer.CompareAndSaveToFile("./neutron_tagging_comparison_output.root");
  
   return 0;
 }
